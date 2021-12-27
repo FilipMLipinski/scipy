@@ -3280,6 +3280,76 @@ def _minimize_powell(func, x0, args=(), callback=None, bounds=None,
         result['allvecs'] = allvecs
     return result
 
+def _minimize_auglag(func, x0, args=(), jac = None, constraints=(), tol = None):
+    """Minimize a function, with x satisfying a set of constraints, using the 
+    Augumented Lagrangian method.
+
+    JAC functionality is not yet working
+    """
+    
+    # wrapper is used to call fun together with the given args.
+    def wrapper(x):
+        return fun(x, *args)
+
+    # each constraint is a dictionary with the values
+    #   type : str [eq, or ineq]
+    #   fun : callable
+    #   jac: callable [optional]
+    constrFuncH = [c for c in constraints if c['type'] == 'eq']
+    constrFuncG = [c for c in constraints if c['type'] == 'ineq']
+
+    # defining the penalty-multiplier function
+    lambd = np.full(len(constrFuncH), 1.0) # each equality constraint gets a different multiplier
+    mu = np.full(len(constrFuncG), 1.0) # ... and each inequality constraint gets a different multiplier
+    min_lambd = 0
+    max_lambd = 1000
+    max_mu = 1000
+    penalt = 1
+    max_penalt = 1000
+    gamma = 2 # how the penalty increases on each iteration
+    defTol = 0.00001 # default tolerance, in case tol=None
+    tolerance = defTol if (tol is None) else tol
+
+    def pmF_eq(p, l, x):
+        temp_sum = 0
+        for i in range(0, len(constrFuncH)):
+            temp_sum += (constrFuncH[i]['fun'](x) + l[i]/p)**2
+        return (p/2)*temp_sum
+
+    def pmF_ineq(p, m, x):
+        temp_sum = 0
+        for i in range(0, len(constrFuncG)):
+            temp_sum += max(0, (constrFuncG[i]['fun'](x) + m[i]/p))**2
+        return (p/2)*temp_sum
+
+    # defining the augumented lagrangian
+    def AugLag(x):
+        return wrapper(x) + pmF_eq(penalt, lambd, x) + pmF_ineq(penalt, mu, x)
+            
+
+    # running the algorithm
+    x_appr = x0 #initial guess
+    closeEnough = False
+    # 'previous' value is stored to see if enough progress has been made
+    prev = wrapper(x_appr) 
+    while(not closeEnough):
+        # STEP 1 - find the approximate minimizer for the lagrangian
+        x_appr = minimize(AugLag, x_appr).x
+
+        # STEPS 2,3 - update the multipliers and penalty
+        for i in range(0, len(constrFuncH)):
+            lambd[i] = max(min(lambd[i] + penalt*constrFuncH[i]['fun'](x_appr), max_lambd), min_lambd)
+        for i in range(0, len(constrFuncG)):
+            mu[i] = max(min(mu[i] + penalt*constrFuncG[i]['fun'](x_appr), max_mu), 0)
+        if (penalt <= max_penalt): penalt = min(penalt*gamma, max_penalt)
+
+        # break if progress is below the tolerance
+        curr = wrapper(x_appr)
+        closeEnough = (abs(prev - curr) <= tolerance)
+        prev = curr
+
+    return x_appr
+
 
 def _endprint(x, flag, fval, maxfun, xtol, disp):
     if flag == 0:
@@ -3295,6 +3365,10 @@ def _endprint(x, flag, fval, maxfun, xtol, disp):
         if disp:
             print("\n{}".format(_status_message['nan']))
     return
+
+
+
+
 
 
 def brute(func, ranges, args=(), Ns=20, full_output=0, finish=fmin,
